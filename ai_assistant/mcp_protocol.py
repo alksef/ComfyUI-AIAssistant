@@ -104,10 +104,12 @@ def _handle_tools_call(
         return _error_response(id_value, INVALID_PARAMS)
     if params.get("name") != TOOL_NAME:
         return _error_response(id_value, INVALID_PARAMS)
-    if set(params) - {"name", "arguments"}:
+    if set(params) - {"name", "arguments", "_meta"}:
         return _error_response(id_value, INVALID_PARAMS)
-    arguments = params.get("arguments", {})
-    if arguments != {}:
+    if "_meta" in params and not isinstance(params["_meta"], dict):
+        return _error_response(id_value, INVALID_PARAMS)
+    arguments = params.get("arguments")
+    if arguments is not None and arguments != {}:
         return _error_response(id_value, INVALID_PARAMS)
     envelope = context_provider()
     text = json.dumps(envelope, separators=(",", ":"))

@@ -244,7 +244,7 @@ class ToolsCallTests(unittest.TestCase):
                 self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
 
     def test_non_empty_arguments_get_invalid_params(self):
-        for arguments in ({"x": 1}, [], "x", 3, None):
+        for arguments in ({"x": 1}, [], "x", 3):
             with self.subTest(arguments=arguments):
                 response = MCP.dispatch(
                     _message(
@@ -261,6 +261,107 @@ class ToolsCallTests(unittest.TestCase):
             _message(
                 "tools/call",
                 params={"name": MCP.TOOL_NAME, "extra": 1},
+                include_params=True,
+            ),
+            _provider({}),
+        )
+        self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+
+    def test_null_arguments_are_accepted(self):
+        response = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": MCP.TOOL_NAME, "arguments": None},
+                include_params=True,
+            ),
+            _provider(AVAILABLE_ENVELOPE),
+        )
+        self.assertNotIn("error", response)
+        self.assertEqual(
+            response["result"]["content"][0]["text"],
+            json.dumps(AVAILABLE_ENVELOPE, separators=(",", ":")),
+        )
+
+    def test_null_arguments_result_identical_to_empty_arguments(self):
+        with_empty = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": MCP.TOOL_NAME, "arguments": {}},
+                include_params=True,
+            ),
+            _provider(AVAILABLE_ENVELOPE),
+        )
+        with_null = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": MCP.TOOL_NAME, "arguments": None},
+                include_params=True,
+            ),
+            _provider(AVAILABLE_ENVELOPE),
+        )
+        self.assertEqual(with_empty["result"], with_null["result"])
+
+    def test_empty_meta_are_accepted(self):
+        response = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": MCP.TOOL_NAME, "_meta": {}},
+                include_params=True,
+            ),
+            _provider(AVAILABLE_ENVELOPE),
+        )
+        self.assertNotIn("error", response)
+        self.assertEqual(
+            response["result"]["content"][0]["text"],
+            json.dumps(AVAILABLE_ENVELOPE, separators=(",", ":")),
+        )
+
+    def test_meta_contents_are_not_echoed(self):
+        response = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={
+                    "name": MCP.TOOL_NAME,
+                    "_meta": {"progressToken": 7},
+                    "arguments": {},
+                },
+                include_params=True,
+            ),
+            _provider(AVAILABLE_ENVELOPE),
+        )
+        self.assertNotIn("error", response)
+        self.assertNotIn("_meta", response["result"])
+        self.assertNotIn("progressToken", response["result"])
+
+    def test_non_object_meta_get_invalid_params(self):
+        for meta in ("x", 3, [], True, None):
+            with self.subTest(meta=meta):
+                response = MCP.dispatch(
+                    _message(
+                        "tools/call",
+                        params={"name": MCP.TOOL_NAME, "_meta": meta},
+                        include_params=True,
+                    ),
+                    _provider({}),
+                )
+                self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+
+    def test_meta_with_unexpected_key_get_invalid_params(self):
+        response = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": MCP.TOOL_NAME, "unexpected": 1},
+                include_params=True,
+            ),
+            _provider({}),
+        )
+        self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+
+    def test_meta_with_wrong_tool_name_get_invalid_params(self):
+        response = MCP.dispatch(
+            _message(
+                "tools/call",
+                params={"name": "other", "_meta": {}},
                 include_params=True,
             ),
             _provider({}),
