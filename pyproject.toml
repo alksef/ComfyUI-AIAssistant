@@ -8,10 +8,10 @@ license = { text = "MIT" }
 dependencies = []
 
 [project.urls]
-Repository = "https://github.com/OWNER/ComfyUI-AIAssistant"
+Repository = "https://github.com/alksef/ComfyUI-AIAssistant"
 
 [tool.comfy]
-PublisherId = "OWNER"
+PublisherId = "alksef"
 DisplayName = "aiAssistant"
 
 [tool.ruff]

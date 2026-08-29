@@ -3,4 +3,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .work/
+node_modules/
 
+# local working notes, not part of the published repo
+TODO.md
