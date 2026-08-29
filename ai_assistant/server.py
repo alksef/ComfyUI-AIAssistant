@@ -6,14 +6,17 @@ executable workflow nodes and never logs, persists, or echoes payloads.
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from aiohttp import WSMsgType, web
 from server import PromptServer
 
+from . import commands
 from .mcp_protocol import JSONRPC_VERSION, PARSE_ERROR, dispatch
 from .pages import PageRegistry
 
@@ -24,6 +27,9 @@ WS_PATH = "/ai-assistant/ws"
 MAX_BODY_BYTES = 128 * 1024
 MAX_MCP_BODY_BYTES = 64 * 1024
 _CHUNK_SIZE = 8192
+
+WRITE_CONFIRM_TIMEOUT = 3.0
+_POLL_INTERVAL = 0.15
 
 _WS_HEARTBEAT = 20.0
 _WS_ERROR_INVALID_JSON = "invalid json"
@@ -67,6 +73,8 @@ class ContextMailbox:
 _mailbox = ContextMailbox()
 _registry = PageRegistry()
 _mailbox_mirrored_page: str | None = None
+_page_sockets: dict[str, web.WebSocketResponse] = {}
+_pending_write: dict[str, Any] | None = None
 
 
 def _normalize(payload: Any) -> dict[str, Any]:
@@ -227,6 +235,80 @@ def _mcp_body_too_large() -> web.Response:
     )
 
 
+def _prune_page_sockets() -> None:
+    """Drop socket-map entries for pages the registry no longer tracks."""
+    connected = {page["page_id"] for page in _registry.summaries() if page["connected"]}
+    for page_id in [pid for pid in _page_sockets if pid not in connected]:
+        _page_sockets.pop(page_id, None)
+
+
+async def _send_command(ws: web.WebSocketResponse, frame: dict[str, Any]) -> None:
+    try:
+        await ws.send_json(frame)
+    except Exception:
+        pass
+
+
+def _handle_set_widget_text(params: dict[str, Any]) -> dict[str, Any]:
+    arguments = params.get("arguments") if isinstance(params, dict) else None
+    validated = commands.validate_params(arguments)
+    if not validated.get("ok"):
+        return commands.failure_result(validated["error"])
+    widget = validated["widget"]
+    text = validated["text"]
+    expected_revision = validated["expected_revision"]
+
+    envelope = _context_envelope()
+    selection = commands.resolve_selection(envelope, widget)
+    if not selection.get("ok"):
+        return commands.failure_result(selection["error"])
+
+    active = _registry.active_page_id()
+    ws = None if active is None else _page_sockets.get(active)
+    if ws is None:
+        return commands.failure_result("no active page")
+
+    revision = commands.check_revision(envelope, expected_revision)
+    if not revision.get("ok"):
+        return commands.failure_result("revision mismatch", revision.get("current_revision"))
+
+    command_id = uuid.uuid4().hex
+    frame = commands.build_command(command_id, widget, text)
+    asyncio.create_task(_send_command(ws, frame))
+
+    global _pending_write
+    if _pending_write is None:
+        _pending_write = {
+            "command_id": command_id,
+            "widget": widget,
+            "expected_revision": expected_revision,
+            "deadline": asyncio.get_running_loop().time() + WRITE_CONFIRM_TIMEOUT,
+        }
+    return commands.success_result("queued", expected_revision, widget)
+
+
+async def _confirm_write(response: dict[str, Any]) -> dict[str, Any]:
+    """Poll for a revision advance within the bounded wait, then reply."""
+    global _pending_write
+    pending = _pending_write
+    expected_revision = pending["expected_revision"]
+    widget = pending["widget"]
+    deadline = pending["deadline"]
+    loop = asyncio.get_running_loop()
+    try:
+        while loop.time() < deadline:
+            await asyncio.sleep(_POLL_INTERVAL)
+            envelope = _context_envelope()
+            snapshot = envelope.get("snapshot")
+            revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
+            if isinstance(revision, int) and revision > expected_revision:
+                response["result"] = commands.success_result("applied", revision, widget)
+                return response
+    finally:
+        _pending_write = None
+    return response
+
+
 async def handle_mcp(request: web.Request) -> web.Response:
     if request.method != "POST":
         return _mcp_method_not_allowed()
@@ -245,9 +327,12 @@ async def handle_mcp(request: web.Request) -> web.Response:
     except (UnicodeDecodeError, ValueError):
         return _mcp_parse_error()
 
-    response = dispatch(message, _context_envelope)
+    pending_before = _pending_write is not None
+    response = dispatch(message, _context_envelope, command_handler=_handle_set_widget_text)
     if response is None:
         return _mcp_no_content()
+    if _pending_write is not None and not pending_before:
+        response = await _confirm_write(response)
     return _json(response)
 
 
@@ -263,9 +348,12 @@ async def _ws_handle_register(
     new_page_id = message.get("page_id")
     if page_id is not None and new_page_id != page_id:
         _registry.disconnect(page_id)
+        _page_sockets.pop(page_id, None)
     if not _registry.register(new_page_id).get("ok"):
         await _ws_send_error(ws, _WS_ERROR_REGISTER)
         return None
+    _page_sockets[new_page_id] = ws
+    _prune_page_sockets()
     _mirror_mailbox()
     await ws.send_json({"type": "registered", "ok": True})
     return new_page_id
@@ -344,6 +432,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     finally:
         if page_id is not None:
             _registry.disconnect(page_id)
+            _page_sockets.pop(page_id, None)
         _mirror_mailbox()
     return ws
 

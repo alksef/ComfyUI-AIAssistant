@@ -22,6 +22,11 @@ SERVER_VERSION = "0.1.0"
 TOOL_NAME = "get_selection"
 TOOL_DESCRIPTION = "Read-only access to the current ComfyUI canvas selection."
 
+SET_WIDGET_TOOL_NAME = "set_widget_text"
+SET_WIDGET_TOOL_DESCRIPTION = (
+    "Write text into a text-like widget of the currently selected ComfyUI node."
+)
+
 PARSE_ERROR = -32700
 INVALID_REQUEST = -32600
 METHOD_NOT_FOUND = -32601
@@ -34,6 +39,7 @@ _ERROR_MESSAGES = {
 }
 
 ContextProvider = Callable[[], Any]
+CommandHandler = Callable[[dict[str, Any]], dict[str, Any]]
 
 __all__ = ["dispatch"]
 
@@ -88,22 +94,31 @@ def _handle_tools_list(id_value: Any, params: Any, has_params: bool) -> dict[str
                         "properties": {},
                         "additionalProperties": False,
                     },
-                }
+                },
+                {
+                    "name": SET_WIDGET_TOOL_NAME,
+                    "description": SET_WIDGET_TOOL_DESCRIPTION,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "widget": {"type": "string"},
+                            "text": {"type": "string"},
+                            "expected_revision": {"type": "integer"},
+                        },
+                        "required": ["widget", "text", "expected_revision"],
+                        "additionalProperties": False,
+                    },
+                },
             ]
         },
     )
 
 
-def _handle_tools_call(
+def _handle_get_selection_call(
     id_value: Any,
-    params: Any,
-    has_params: bool,
+    params: dict[str, Any],
     context_provider: ContextProvider,
 ) -> dict[str, Any]:
-    if not has_params or not isinstance(params, dict):
-        return _error_response(id_value, INVALID_PARAMS)
-    if params.get("name") != TOOL_NAME:
-        return _error_response(id_value, INVALID_PARAMS)
     if set(params) - {"name", "arguments", "_meta"}:
         return _error_response(id_value, INVALID_PARAMS)
     if "_meta" in params and not isinstance(params["_meta"], dict):
@@ -119,19 +134,58 @@ def _handle_tools_call(
     )
 
 
+def _handle_set_widget_text_call(
+    id_value: Any,
+    params: dict[str, Any],
+    command_handler: CommandHandler | None,
+) -> dict[str, Any]:
+    if command_handler is None:
+        text = json.dumps({"error": "command handler unavailable"}, separators=(",", ":"))
+        return _result_response(
+            id_value,
+            {"content": [{"type": "text", "text": text}], "isError": True},
+        )
+    return _result_response(id_value, command_handler(params))
+
+
+def _handle_tools_call(
+    id_value: Any,
+    params: Any,
+    has_params: bool,
+    context_provider: ContextProvider,
+    command_handler: CommandHandler | None,
+) -> dict[str, Any]:
+    if not has_params or not isinstance(params, dict):
+        return _error_response(id_value, INVALID_PARAMS)
+    name = params.get("name")
+    if name == TOOL_NAME:
+        return _handle_get_selection_call(id_value, params, context_provider)
+    if name == SET_WIDGET_TOOL_NAME:
+        return _handle_set_widget_text_call(id_value, params, command_handler)
+    return _error_response(id_value, INVALID_PARAMS)
+
+
 def _handle_ping(id_value: Any, params: Any, has_params: bool) -> dict[str, Any]:
     if has_params and not isinstance(params, dict):
         return _error_response(id_value, INVALID_PARAMS)
     return _result_response(id_value, {})
 
 
-def dispatch(message: Any, context_provider: ContextProvider) -> dict[str, Any] | None:
+def dispatch(
+    message: Any,
+    context_provider: ContextProvider,
+    command_handler: CommandHandler | None = None,
+) -> dict[str, Any] | None:
     """Dispatch one decoded JSON-RPC message to a response dict or ``None``.
 
     ``message`` is the already-parsed JSON value. ``context_provider`` is a
     zero-argument callable returning the context envelope object; it is invoked
     only for a ``get_selection`` tool call and its return value is serialized
-    without mutation. Notifications always yield ``None``.
+    without mutation. ``command_handler`` is an optional callable accepting the
+    full ``tools/call`` params dict for ``set_widget_text`` and returning its
+    MCP result dict, which is placed in the response verbatim; when omitted the
+    dispatcher replies with a "command handler unavailable" tool error.
+    Notifications always yield ``None``.
     """
     if not isinstance(message, dict):
         return _error_response(None, INVALID_REQUEST)
@@ -150,7 +204,7 @@ def dispatch(message: Any, context_provider: ContextProvider) -> dict[str, Any] 
     if method == "tools/list":
         return _handle_tools_list(id_value, params, has_params)
     if method == "tools/call":
-        return _handle_tools_call(id_value, params, has_params, context_provider)
+        return _handle_tools_call(id_value, params, has_params, context_provider, command_handler)
     if method == "ping":
         return _handle_ping(id_value, params, has_params)
     return _error_response(id_value, METHOD_NOT_FOUND)

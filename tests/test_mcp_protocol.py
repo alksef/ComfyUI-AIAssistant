@@ -146,20 +146,39 @@ class NotificationTests(unittest.TestCase):
 
 
 class ToolsListTests(unittest.TestCase):
-    def test_returns_exactly_one_tool_with_exact_shape(self):
+    def test_returns_exactly_two_tools_with_exact_shapes(self):
         response = MCP.dispatch(_message("tools/list", id_value="list-1"), _provider({}))
         self.assertEqual(response["id"], "list-1")
         self.assertNotIn("error", response)
         tools = response["result"]["tools"]
-        self.assertEqual(len(tools), 1)
-        tool = tools[0]
-        self.assertEqual(tool["name"], MCP.TOOL_NAME)
-        self.assertEqual(tool["description"], MCP.TOOL_DESCRIPTION)
+        self.assertEqual(len(tools), 2)
+        get_selection, set_widget_text = tools
+        self.assertEqual(get_selection["name"], MCP.TOOL_NAME)
+        self.assertEqual(get_selection["description"], MCP.TOOL_DESCRIPTION)
         self.assertEqual(
-            tool["inputSchema"],
+            get_selection["inputSchema"],
             {"type": "object", "properties": {}, "additionalProperties": False},
         )
-        self.assertNotIn("\n", tool["description"])
+        self.assertNotIn("\n", get_selection["description"])
+        self.assertEqual(set_widget_text["name"], MCP.SET_WIDGET_TOOL_NAME)
+        self.assertEqual(
+            set_widget_text["description"],
+            "Write text into a text-like widget of the currently selected ComfyUI node.",
+        )
+        self.assertEqual(
+            set_widget_text["inputSchema"],
+            {
+                "type": "object",
+                "properties": {
+                    "widget": {"type": "string"},
+                    "text": {"type": "string"},
+                    "expected_revision": {"type": "integer"},
+                },
+                "required": ["widget", "text", "expected_revision"],
+                "additionalProperties": False,
+            },
+        )
+        self.assertNotIn("\n", set_widget_text["description"])
 
     def test_accepts_absent_params(self):
         response = MCP.dispatch(_message("tools/list"), _provider({}))
@@ -367,6 +386,112 @@ class ToolsCallTests(unittest.TestCase):
             _provider({}),
         )
         self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+
+
+class SetWidgetTextToolTests(unittest.TestCase):
+    def _call(self, params: dict[str, Any], handler: Any = None) -> dict[str, Any]:
+        return MCP.dispatch(
+            _message("tools/call", params=params, include_params=True),
+            _provider({}),
+            handler,
+        )
+
+    def test_routes_params_verbatim_to_handler_and_returns_result_dict(self):
+        received: dict[str, Any] = {}
+
+        def handler(params):
+            received["params"] = params
+            return {"content": [{"type": "text", "text": "handled"}], "isError": False}
+
+        params = {
+            "name": MCP.SET_WIDGET_TOOL_NAME,
+            "arguments": {"widget": "text", "text": "hi", "expected_revision": 3},
+        }
+        response = self._call(params, handler)
+        self.assertEqual(received["params"], params)
+        self.assertEqual(
+            response,
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "result": {
+                    "content": [{"type": "text", "text": "handled"}],
+                    "isError": False,
+                },
+            },
+        )
+
+    def test_extra_keys_are_passed_through_to_handler(self):
+        received: dict[str, Any] = {}
+
+        def handler(params):
+            received["params"] = params
+            return {"content": [{"type": "text", "text": "ok"}], "isError": False}
+
+        params = {
+            "name": MCP.SET_WIDGET_TOOL_NAME,
+            "arguments": {},
+            "_meta": {},
+            "extra": 1,
+        }
+        self._call(params, handler)
+        self.assertEqual(received["params"], params)
+
+    def test_handler_less_call_returns_is_error_result(self):
+        params = {
+            "name": MCP.SET_WIDGET_TOOL_NAME,
+            "arguments": {"widget": "text", "text": "hi", "expected_revision": 3},
+        }
+        response = self._call(params)
+        self.assertNotIn("error", response)
+        self.assertIs(response["result"]["isError"], True)
+        self.assertEqual(
+            response["result"]["content"][0]["text"],
+            '{"error":"command handler unavailable"}',
+        )
+
+    def test_handler_less_call_does_not_invoke_provider(self):
+        calls: list[Any] = []
+        params = {"name": MCP.SET_WIDGET_TOOL_NAME}
+        response = MCP.dispatch(
+            _message("tools/call", params=params, include_params=True),
+            lambda: calls.append(1),
+        )
+        self.assertIs(response["result"]["isError"], True)
+        self.assertEqual(calls, [])
+
+    def test_non_object_params_still_invalid_params(self):
+        for params in ("x", [1], True):
+            with self.subTest(params=params):
+                response = self._call(params, handler=lambda _: {"handled": True})
+                self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+                self.assertNotIn("result", response)
+
+    def test_missing_params_still_invalid_params(self):
+        response = MCP.dispatch(
+            _message("tools/call"),
+            _provider({}),
+            lambda _: {"handled": True},
+        )
+        self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+
+    def test_unknown_tool_name_still_invalid_params(self):
+        response = self._call({"name": "other"}, handler=lambda _: {"handled": True})
+        self.assertEqual(response["error"]["code"], MCP.INVALID_PARAMS)
+        self.assertEqual(response["id"], "1")
+
+    def test_get_selection_ignores_command_handler(self):
+        handler_calls: list[Any] = []
+        response = MCP.dispatch(
+            _message("tools/call", params={"name": MCP.TOOL_NAME}, include_params=True),
+            _provider(AVAILABLE_ENVELOPE),
+            lambda _: handler_calls.append(1),
+        )
+        self.assertEqual(
+            response["result"]["content"][0]["text"],
+            json.dumps(AVAILABLE_ENVELOPE, separators=(",", ":")),
+        )
+        self.assertEqual(handler_calls, [])
 
 
 class PingTests(unittest.TestCase):

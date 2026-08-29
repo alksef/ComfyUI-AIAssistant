@@ -35,3 +35,54 @@ export function snapshotMessage(pageId, body, revision, capturedAt) {
     },
   };
 }
+
+const TEXT_WIDGET_TYPES = ["text", "customtext", "string"];
+
+export function singleSelectedNode(selectedNodes) {
+  if (selectedNodes === null || selectedNodes === undefined) return null;
+  if (typeof selectedNodes !== "object") return null;
+  const keys = Object.keys(selectedNodes);
+  if (keys.length !== 1) return null;
+  const node = selectedNodes[keys[0]];
+  if (node === null || typeof node !== "object") return null;
+  return node;
+}
+
+export function applyWidgetText(node, widgetName, text) {
+  if (
+    node === null ||
+    node === undefined ||
+    !Array.isArray(node.widgets)
+  ) {
+    return { applied: false, reason: "no-widgets" };
+  }
+  let widget = null;
+  for (const w of node.widgets) {
+    if (w !== null && typeof w === "object" && w.name === widgetName) {
+      widget = w;
+      break;
+    }
+  }
+  if (widget === null) return { applied: false, reason: "unknown-widget" };
+  if (typeof widget.type !== "string" || !TEXT_WIDGET_TYPES.includes(widget.type)) {
+    return { applied: false, reason: "not-text-like" };
+  }
+  widget.value = text;
+  if (typeof widget.callback === "function") {
+    try {
+      widget.callback(text);
+    } catch {
+      // swallow callback exceptions; the edit still counts as applied
+    }
+  }
+  return { applied: true };
+}
+
+export function isCommandFrame(message) {
+  return (
+    message !== null &&
+    typeof message === "object" &&
+    message.type === "command" &&
+    message.op === "set_widget_text"
+  );
+}

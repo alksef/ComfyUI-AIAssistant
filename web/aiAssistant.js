@@ -7,6 +7,9 @@ import {
   registerMessage,
   activateMessage,
   snapshotMessage,
+  singleSelectedNode,
+  applyWidgetText,
+  isCommandFrame,
 } from "./sync.js";
 
 const SYNC_PATH = "/ai-assistant/ws";
@@ -80,6 +83,29 @@ app.registerExtension({
       });
       socket.addEventListener("error", () => {
         console.warn("ComfyUI-AIAssistant: context sync socket error");
+      });
+      socket.addEventListener("message", (event) => {
+        let frame;
+        try {
+          frame = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!isCommandFrame(frame) || !isOpen()) return;
+        try {
+          const node = singleSelectedNode(app.canvas?.selected_nodes);
+          if (node === null) return;
+          const result = applyWidgetText(node, frame.widget, frame.text);
+          if (!result.applied) return;
+          try {
+            app.graph.change();
+          } catch {
+            // never throw from the listener
+          }
+          sendSnapshotFor(buildContext(app.canvas));
+        } catch {
+          // never throw from the listener
+        }
       });
     }
 

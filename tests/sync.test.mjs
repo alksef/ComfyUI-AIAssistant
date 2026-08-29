@@ -8,6 +8,9 @@ import {
   registerMessage,
   activateMessage,
   snapshotMessage,
+  singleSelectedNode,
+  applyWidgetText,
+  isCommandFrame,
 } from "../web/sync.js";
 
 test("SCHEMA_VERSION is the bounded context contract version", () => {
@@ -105,4 +108,105 @@ test("snapshotMessage passes revision and captured_at through unchanged", () => 
   const message = snapshotMessage("p", { workflow: {}, selection: [] }, 42, "iso");
   assert.equal(message.snapshot.revision, 42);
   assert.equal(message.snapshot.captured_at, "iso");
+});
+
+test("singleSelectedNode returns the node only for exactly one own entry", () => {
+  const node = { id: 1, type: "KSampler", widgets: [] };
+  assert.equal(singleSelectedNode(null), null);
+  assert.equal(singleSelectedNode(undefined), null);
+  assert.equal(singleSelectedNode({}), null);
+  assert.equal(singleSelectedNode({ 1: node, 2: { id: 2 } }), null);
+  assert.equal(singleSelectedNode({ 1: "not-a-node" }), null);
+  assert.equal(singleSelectedNode(node), null);
+  assert.equal(singleSelectedNode({ 1: node }), node);
+});
+
+test("applyWidgetText rejects unknown, non-text-like and missing widgets", () => {
+  const node = {
+    widgets: [
+      { name: "text_widget", type: "text", value: "old" },
+      { name: "num_widget", type: "number", value: 5 },
+    ],
+  };
+  assert.deepEqual(applyWidgetText(node, "missing", "x"), {
+    applied: false,
+    reason: "unknown-widget",
+  });
+  assert.deepEqual(applyWidgetText(node, "num_widget", "x"), {
+    applied: false,
+    reason: "not-text-like",
+  });
+  assert.deepEqual(applyWidgetText({}, "anything", "x"), {
+    applied: false,
+    reason: "no-widgets",
+  });
+  assert.deepEqual(applyWidgetText(null, "anything", "x"), {
+    applied: false,
+    reason: "no-widgets",
+  });
+  assert.deepEqual(applyWidgetText({ widgets: "not-an-array" }, "a", "x"), {
+    applied: false,
+    reason: "no-widgets",
+  });
+});
+
+test("applyWidgetText applies text and calls the callback with it", () => {
+  const calls = [];
+  const node = {
+    widgets: [
+      {
+        name: "prompt",
+        type: "customtext",
+        value: "before",
+        callback: (t) => calls.push(t),
+      },
+    ],
+  };
+  const result = applyWidgetText(node, "prompt", "after");
+  assert.deepEqual(result, { applied: true });
+  assert.equal(node.widgets[0].value, "after");
+  assert.deepEqual(calls, ["after"]);
+  assert.equal(node.widgets[0].name, "prompt");
+
+  const noCallback = { widgets: [{ name: "w", type: "string", value: "" }] };
+  assert.deepEqual(applyWidgetText(noCallback, "w", "set"), { applied: true });
+  assert.equal(noCallback.widgets[0].value, "set");
+});
+
+test("applyWidgetText swallows throwing callbacks and still reports applied", () => {
+  const node = {
+    widgets: [
+      {
+        name: "w",
+        type: "text",
+        value: "",
+        callback: () => {
+          throw new Error("boom");
+        },
+      },
+    ],
+  };
+  let result;
+  assert.doesNotThrow(() => {
+    result = applyWidgetText(node, "w", "new");
+  });
+  assert.deepEqual(result, { applied: true });
+  assert.equal(node.widgets[0].value, "new");
+});
+
+test("isCommandFrame matches only the exact set_widget_text command frame", () => {
+  assert.equal(
+    isCommandFrame({ type: "command", op: "set_widget_text", widget: "p", text: "x" }),
+    true
+  );
+  assert.equal(isCommandFrame({ type: "registered" }), false);
+  assert.equal(isCommandFrame({ type: "accepted" }), false);
+  assert.equal(isCommandFrame({ type: "activated" }), false);
+  assert.equal(isCommandFrame({ type: "error" }), false);
+  assert.equal(isCommandFrame({ type: "command", op: "other" }), false);
+  assert.equal(isCommandFrame({ type: "command" }), false);
+  assert.equal(isCommandFrame("command"), false);
+  assert.equal(isCommandFrame(null), false);
+  assert.equal(isCommandFrame(42), false);
+  assert.equal(isCommandFrame([{ type: "command", op: "set_widget_text" }]), false);
 });

@@ -379,8 +379,9 @@ class McpRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self._assert_no_store(response)
         tools = self._json(response)["result"]["tools"]
-        self.assertEqual(len(tools), 1)
+        self.assertEqual(len(tools), 2)
         self.assertEqual(tools[0]["name"], MCP_MOD.TOOL_NAME)
+        self.assertEqual(tools[1]["name"], MCP_MOD.SET_WIDGET_TOOL_NAME)
 
     async def test_tools_call_unavailable_envelope_when_mailbox_empty(self):
         response = await _mcp(self._message("tools/call", params={"name": MCP_MOD.TOOL_NAME}))
