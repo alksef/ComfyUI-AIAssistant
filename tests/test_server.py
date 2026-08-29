@@ -144,19 +144,22 @@ class RootEntrypointTests(unittest.TestCase):
         self.assertEqual(ROOT_MOD.NODE_CLASS_MAPPINGS, {})
         self.assertEqual(ROOT_MOD.NODE_DISPLAY_NAME_MAPPINGS, {})
 
-    def test_registers_context_and_mcp_routes(self):
+    def test_registers_context_mcp_and_ws_routes(self):
         registered = FakePromptServer.instance.routes.routes
         context_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.CONTEXT_PATH]
         mcp_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.MCP_PATH]
-        self.assertEqual(len(registered), 3)
+        ws_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.WS_PATH]
+        self.assertEqual(len(registered), 4)
         self.assertEqual(sorted(m for m, _p in context_routes), ["GET", "POST"])
         self.assertEqual(mcp_routes, [("*", SERVER_MOD.MCP_PATH)])
+        self.assertEqual(ws_routes, [("GET", SERVER_MOD.WS_PATH)])
 
     def test_registered_handlers_are_the_backend_handlers(self):
-        handlers = {m: h for m, _p, h in FakePromptServer.instance.routes.routes}
-        self.assertIs(handlers["GET"], SERVER_MOD.handle_get)
-        self.assertIs(handlers["POST"], SERVER_MOD.handle_post)
-        self.assertIs(handlers["*"], SERVER_MOD.handle_mcp)
+        handlers = {(m, p): h for m, p, h in FakePromptServer.instance.routes.routes}
+        self.assertIs(handlers[("GET", SERVER_MOD.CONTEXT_PATH)], SERVER_MOD.handle_get)
+        self.assertIs(handlers[("POST", SERVER_MOD.CONTEXT_PATH)], SERVER_MOD.handle_post)
+        self.assertIs(handlers[("*", SERVER_MOD.MCP_PATH)], SERVER_MOD.handle_mcp)
+        self.assertIs(handlers[("GET", SERVER_MOD.WS_PATH)], SERVER_MOD.handle_ws)
 
 
 class ContextMailboxTests(unittest.IsolatedAsyncioTestCase):
@@ -179,6 +182,8 @@ class ContextMailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(body["available"], False)
         self.assertIsNone(body["received_at"])
         self.assertIsNone(body["snapshot"])
+        self.assertEqual(body["pages"], [])
+        self.assertIsNone(body["active_page"])
 
     async def test_valid_post_then_get_returns_normalized_snapshot(self):
         post_response = await _post(_valid_body())
@@ -205,6 +210,8 @@ class ContextMailboxTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot["revision"], 7)
         self.assertEqual(snapshot["workflow"], {"id": 3, "title": "KSampler"})
         self.assertEqual(snapshot["selection"], [{"id": 3, "title": "KSampler"}])
+        self.assertEqual(body["pages"], [])
+        self.assertIsNone(body["active_page"])
 
     async def test_empty_selection_is_available(self):
         response = await _post(_valid_body(selection=[]))
@@ -386,6 +393,8 @@ class McpRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(envelope["available"], False)
         self.assertIsNone(envelope["received_at"])
         self.assertIsNone(envelope["snapshot"])
+        self.assertEqual(envelope["pages"], [])
+        self.assertIsNone(envelope["active_page"])
 
     async def test_tools_call_reads_live_mailbox_state(self):
         await _post(_valid_body())
@@ -398,6 +407,8 @@ class McpRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(envelope["received_at"], str)
         self.assertEqual(envelope["snapshot"]["revision"], 7)
         self.assertEqual(envelope["snapshot"]["selection"], [{"id": 3, "title": "KSampler"}])
+        self.assertEqual(envelope["pages"], [])
+        self.assertIsNone(envelope["active_page"])
 
     async def test_mcp_envelope_matches_get_route_body(self):
         await _post(_valid_body())

@@ -11,17 +11,28 @@ import json
 from datetime import datetime, timezone
 from typing import Any
 
-from aiohttp import web
+from aiohttp import WSMsgType, web
 from server import PromptServer
 
 from .mcp_protocol import JSONRPC_VERSION, PARSE_ERROR, dispatch
+from .pages import PageRegistry
 
 SCHEMA_VERSION = "comfyui.ai-assistant.context/1"
 CONTEXT_PATH = "/ai-assistant/context"
 MCP_PATH = "/mcp"
+WS_PATH = "/ai-assistant/ws"
 MAX_BODY_BYTES = 128 * 1024
 MAX_MCP_BODY_BYTES = 64 * 1024
 _CHUNK_SIZE = 8192
+
+_WS_HEARTBEAT = 20.0
+_WS_ERROR_INVALID_JSON = "invalid json"
+_WS_ERROR_NOT_OBJECT = "message must be a JSON object"
+_WS_ERROR_UNKNOWN_TYPE = "unknown message type"
+_WS_ERROR_BINARY = "binary frames are not supported"
+_WS_ERROR_REGISTER = "register failed"
+_WS_ERROR_SNAPSHOT = "snapshot rejected"
+_WS_ERROR_ACTIVATE = "activate failed"
 
 
 class BodyTooLarge(Exception):
@@ -54,6 +65,8 @@ class ContextMailbox:
 
 
 _mailbox = ContextMailbox()
+_registry = PageRegistry()
+_mailbox_mirrored_page: str | None = None
 
 
 def _normalize(payload: Any) -> dict[str, Any]:
@@ -106,13 +119,31 @@ def _unavailable_envelope() -> dict[str, Any]:
 
 def _context_envelope() -> dict[str, Any]:
     if not _mailbox.available:
-        return _unavailable_envelope()
-    return {
-        "schema_version": SCHEMA_VERSION,
-        "available": True,
-        "received_at": _mailbox.received_at,
-        "snapshot": _mailbox.snapshot_copy(),
-    }
+        envelope = _unavailable_envelope()
+    else:
+        envelope = {
+            "schema_version": SCHEMA_VERSION,
+            "available": True,
+            "received_at": _mailbox.received_at,
+            "snapshot": _mailbox.snapshot_copy(),
+        }
+    envelope["pages"] = _registry.summaries()
+    active = _registry.active_page_id()
+    envelope["active_page"] = None if active is None else {"page_id": active, "connected": True}
+    return envelope
+
+
+def _mirror_mailbox() -> None:
+    """Copy the active page's stored snapshot into the mailbox when it changed."""
+    global _mailbox_mirrored_page
+    active = _registry.active_page_id()
+    if active is None or active == _mailbox_mirrored_page:
+        return
+    snapshot = _registry.snapshot_for(active)
+    if snapshot is None:
+        return
+    _mailbox.replace(snapshot)
+    _mailbox_mirrored_page = active
 
 
 async def handle_get(request: web.Request) -> web.Response:
@@ -151,6 +182,8 @@ async def handle_post(request: web.Request) -> web.Response:
         return _json({"error": "invalid context snapshot"}, status=400)
 
     _mailbox.replace(snapshot)
+    global _mailbox_mirrored_page
+    _mailbox_mirrored_page = None
     return _json({"accepted": True, "revision": snapshot["revision"]})
 
 
@@ -218,8 +251,106 @@ async def handle_mcp(request: web.Request) -> web.Response:
     return _json(response)
 
 
+async def _ws_send_error(ws: web.WebSocketResponse, error: str) -> None:
+    await ws.send_json({"type": "error", "ok": False, "error": error})
+
+
+async def _ws_handle_register(
+    ws: web.WebSocketResponse,
+    message: dict[str, Any],
+    page_id: str | None,
+) -> str | None:
+    new_page_id = message.get("page_id")
+    if page_id is not None and new_page_id != page_id:
+        _registry.disconnect(page_id)
+    if not _registry.register(new_page_id).get("ok"):
+        await _ws_send_error(ws, _WS_ERROR_REGISTER)
+        return None
+    _mirror_mailbox()
+    await ws.send_json({"type": "registered", "ok": True})
+    return new_page_id
+
+
+async def _ws_handle_snapshot(
+    ws: web.WebSocketResponse,
+    message: dict[str, Any],
+) -> None:
+    page_id = message.get("page_id")
+    try:
+        snapshot = _normalize(message.get("snapshot"))
+    except ValueError:
+        await _ws_send_error(ws, _WS_ERROR_SNAPSHOT)
+        return
+    if not _registry.record_snapshot(page_id, snapshot).get("ok"):
+        await _ws_send_error(ws, _WS_ERROR_SNAPSHOT)
+        return
+    global _mailbox_mirrored_page
+    if _registry.active_page_id() == page_id:
+        _mailbox.replace(snapshot)
+        _mailbox_mirrored_page = page_id
+    await ws.send_json({"type": "accepted", "ok": True, "revision": snapshot["revision"]})
+
+
+async def _ws_handle_activate(
+    ws: web.WebSocketResponse,
+    message: dict[str, Any],
+) -> None:
+    page_id = message.get("page_id")
+    if not _registry.activate(page_id).get("ok"):
+        await _ws_send_error(ws, _WS_ERROR_ACTIVATE)
+        return
+    _mirror_mailbox()
+    await ws.send_json({"type": "activated", "ok": True})
+
+
+async def _ws_handle_message(
+    ws: web.WebSocketResponse,
+    data: str,
+    page_id: str | None,
+) -> str | None:
+    try:
+        message = json.loads(data)
+    except (UnicodeDecodeError, ValueError):
+        await _ws_send_error(ws, _WS_ERROR_INVALID_JSON)
+        return page_id
+    if not isinstance(message, dict):
+        await _ws_send_error(ws, _WS_ERROR_NOT_OBJECT)
+        return page_id
+    message_type = message.get("type")
+    if message_type == "register":
+        return await _ws_handle_register(ws, message, page_id)
+    if message_type == "snapshot":
+        await _ws_handle_snapshot(ws, message)
+        return page_id
+    if message_type == "activate":
+        await _ws_handle_activate(ws, message)
+        return page_id
+    await _ws_send_error(ws, _WS_ERROR_UNKNOWN_TYPE)
+    return page_id
+
+
+async def handle_ws(request: web.Request) -> web.WebSocketResponse:
+    ws = web.WebSocketResponse(heartbeat=_WS_HEARTBEAT, max_msg_size=MAX_BODY_BYTES)
+    await ws.prepare(request)
+    page_id: str | None = None
+    try:
+        async for message in ws:
+            if message.type == WSMsgType.TEXT:
+                page_id = await _ws_handle_message(ws, message.data, page_id)
+            elif message.type in (WSMsgType.CLOSE, WSMsgType.CLOSED, WSMsgType.ERROR):
+                break
+            else:
+                await _ws_send_error(ws, _WS_ERROR_BINARY)
+    finally:
+        if page_id is not None:
+            _registry.disconnect(page_id)
+        _mirror_mailbox()
+    return ws
+
+
 def register_routes() -> None:
     routes = PromptServer.instance.routes
     routes.get(CONTEXT_PATH)(handle_get)
     routes.post(CONTEXT_PATH)(handle_post)
     routes.route("*", MCP_PATH)(handle_mcp)
+    routes.get(WS_PATH)(handle_ws)

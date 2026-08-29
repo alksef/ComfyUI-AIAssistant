@@ -20,10 +20,10 @@ The extension is a read-only context provider, not a chat client and not an
 execution tool.
 
 ```text
-ComfyUI canvas selection
+ComfyUI canvas selection (per browser tab)
         ↓
 ComfyUI-AIAssistant frontend snapshot
-        ↓ same-origin, memory only
+        ↓ same-origin WebSocket into a page registry, memory only
 ComfyUI GET /ai-assistant/context
         ↓ localhost pull per turn, or MCP adapter (ROADMAP-002)
 any consumer: local assistant, agent, script
@@ -62,9 +62,11 @@ workflow metadata and a `selection` array. Empty selection is a valid available
 snapshot, distinct from “the frontend has never published a snapshot”. Responses
 must carry `Cache-Control: no-store`.
 
-The frontend updates the in-process snapshot through a same-origin write route.
-That write changes only the extension's volatile mailbox. It never changes the
-ComfyUI graph or persists content.
+The frontend updates the in-process snapshot through a same-origin WebSocket
+into a bounded page registry (owner decision 2026-08-29); the accepted
+`POST /ai-assistant/context` route remains as an anonymous write channel for
+scripts and debugging. Both change only the extension's volatile mailbox. They
+never change the ComfyUI graph or persist content.
 
 Widget values are data, not trusted instructions. Values must be JSON-safe and
 bounded before they enter the mailbox. Secret-like fields and oversized strings
@@ -83,20 +85,39 @@ must not be exposed.
 Acceptance: tests cover initial GET, accepted replacement, invalid JSON/shape,
 oversized payload and no-store headers; no node classes or persistence exist.
 
-### P1 — Frontend selected-node snapshot
+### P1 — Frontend sync over WebSocket with a page registry
 
-- Load as a standard ComfyUI JavaScript extension.
-- Observe selection and relevant widget/connection changes without modifying
-  core frontend code.
-- Publish only when the normalized snapshot changes.
-- Handle empty selection, one detailed node, multiple selection as names only,
-  and the current visible subgraph.
-- Bound/redact values before the same-origin POST.
-- Show a small passive indication of which selection is exposed if the current
-  frontend API supports it cleanly.
+Owner decision 2026-08-29: the frontend↔server channel is a same-origin
+WebSocket with a page registry, not POST-with-lease. Rationale: socket
+liveness is the page-liveness signal (no heartbeat timeouts, immune to
+background-tab timer throttling), multiple browser tabs are first-class
+instead of rejected, and the socket is the natural server→page channel for
+any future controlled-action roadmap.
+
+- Each browser tab opens `WS /ai-assistant/ws` and sends JSON text frames:
+  `register` (page_id), `snapshot` (the same normalized snapshot object the
+  POST route accepts), `activate` (on focus/visibilitychange).
+- The server keeps a bounded in-memory page registry: page_id, workflow
+  identity, last snapshot, connected flag. Socket close marks the page
+  disconnected immediately.
+- The active page is the most recently activated connected page; its snapshot
+  is what the read route serves. When the active page disconnects, the most
+  recently activated remaining connected page takes over.
+- The public envelope gains additive fields only: `pages` (bounded list of
+  page summaries) and `active_page`. `schema_version` stays `/1`; existing
+  consumers ignore unknown fields; the MCP tool passes the envelope through
+  unchanged (ROADMAP-002).
+- The accepted `POST /ai-assistant/context` route stays byte-for-byte as it
+  is: an anonymous snapshot channel for scripts and debugging that does not
+  create registry pages.
+- The frontend extension polls the canvas locally, publishes only when the
+  normalized snapshot changes, reconnects with capped backoff, never logs
+  payloads, and sends no telemetry.
 
 Acceptance: selecting a node changes GET output; editing a visible widget
-increments the revision; deselecting produces an available empty selection.
+increments the revision; deselecting produces an available empty selection;
+closing the tab flips `active_page.connected` without a timeout; a second
+tab registers and takes over on focus.
 
 ### P2 — Consumer access
 
@@ -134,3 +155,6 @@ separate roadmap with explicit review and confirmation.
 - Node ids are scoped by graph/subgraph and are not durable identity.
 - A stale snapshot can mislead the model; capture time and graph identity must
   remain visible to the consumer.
+- The WebSocket channel adds reconnect and presence state on both sides; keep
+  the message set minimal and the public envelope additive so consumers never
+  depend on socket lifecycle.
