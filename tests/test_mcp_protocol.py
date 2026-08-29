@@ -173,8 +173,9 @@ class ToolsListTests(unittest.TestCase):
                     "widget": {"type": "string"},
                     "text": {"type": "string"},
                     "expected_revision": {"type": "integer"},
+                    "expected_page": {"type": "string"},
                 },
-                "required": ["widget", "text", "expected_revision"],
+                "required": ["widget", "text", "expected_revision", "expected_page"],
                 "additionalProperties": False,
             },
         )

@@ -78,6 +78,11 @@ export function applyWidgetText(node, widgetName, text) {
   return { applied: true };
 }
 
+export function pageBadgeLabel(pageId) {
+  if (typeof pageId !== "string" || pageId.length < 4) return null;
+  return "AI-" + pageId.slice(0, 4).toUpperCase();
+}
+
 export function isCommandFrame(message) {
   return (
     message !== null &&

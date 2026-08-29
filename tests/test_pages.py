@@ -31,6 +31,7 @@ PAGES = _load_module()
 
 PageRegistry = PAGES.PageRegistry
 PAGE_CAP = PAGES.PAGE_CAP
+page_label = PAGES.page_label
 
 
 class _RisingClock:
@@ -344,15 +345,49 @@ class SummaryTests(unittest.TestCase):
         summary = registry.summaries()[0]
         self.assertEqual(
             set(summary.keys()),
-            {"page_id", "workflow_name", "connected"},
+            {"page_id", "page_label", "workflow_name", "connected"},
         )
         self.assertEqual(summary["page_id"], "tab")
+        self.assertEqual(summary["page_label"], "tab")
         self.assertEqual(summary["workflow_name"], "My Flow")
         self.assertIs(summary["connected"], True)
 
     def test_empty_registry_has_no_summaries(self):
         registry = PageRegistry()
         self.assertEqual(registry.summaries(), [])
+
+
+class PageLabelTests(unittest.TestCase):
+    def test_label_uppercases_first_four_chars(self):
+        self.assertEqual(page_label("a1b2-c3d4"), "AI-A1B2")
+
+    def test_label_for_uuid_like_id(self):
+        self.assertEqual(page_label("f47ac10b-58cc"), "AI-F47A")
+
+    def test_short_id_returns_raw_id(self):
+        for page_id in ("", "a", "ab", "abc"):
+            with self.subTest(page_id=page_id):
+                self.assertEqual(page_label(page_id), page_id)
+
+    def test_non_string_returns_raw_value(self):
+        for value in (3, 3.5, None, True, ["a"], b"bytes"):
+            with self.subTest(value=value):
+                self.assertEqual(page_label(value), value)
+
+    def test_label_never_raises(self):
+        for value in (3, 3.5, None, True, ["a"], b"bytes", ""):
+            with self.subTest(value=value):
+                page_label(value)
+
+    def test_summary_label_for_uuid_like_id(self):
+        registry = PageRegistry()
+        registry.register("f47ac10b-58cc")
+        self.assertEqual(registry.summaries()[0]["page_label"], "AI-F47A")
+
+    def test_summary_label_for_short_id(self):
+        registry = PageRegistry()
+        registry.register("abc")
+        self.assertEqual(registry.summaries()[0]["page_label"], "abc")
 
 
 if __name__ == "__main__":

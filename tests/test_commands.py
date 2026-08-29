@@ -72,11 +72,22 @@ def _snapshot(
 class ValidateParamsTests(unittest.TestCase):
     def test_accepts_valid_params(self):
         result = COMMANDS.validate_params(
-            {"widget": "text", "text": "hello", "expected_revision": 7}
+            {
+                "widget": "text",
+                "text": "hello",
+                "expected_revision": 7,
+                "expected_page": "tab-a",
+            }
         )
         self.assertEqual(
             result,
-            {"ok": True, "widget": "text", "text": "hello", "expected_revision": 7},
+            {
+                "ok": True,
+                "widget": "text",
+                "text": "hello",
+                "expected_revision": 7,
+                "expected_page": "tab-a",
+            },
         )
 
     def test_rejects_non_dict_params(self):
@@ -89,15 +100,23 @@ class ValidateParamsTests(unittest.TestCase):
 
     def test_rejects_extra_key(self):
         result = COMMANDS.validate_params(
-            {"widget": "text", "text": "hi", "expected_revision": 0, "extra": 1}
+            {
+                "widget": "text",
+                "text": "hi",
+                "expected_revision": 0,
+                "expected_page": "tab-a",
+                "extra": 1,
+            }
         )
         self.assertEqual(result, {"ok": False, "error": "invalid params keys"})
 
     def test_rejects_missing_key(self):
         for params in (
             {"widget": "text", "text": "hi"},
+            {"widget": "text", "text": "hi", "expected_page": "tab-a"},
             {"widget": "text", "expected_revision": 0},
-            {"text": "hi", "expected_revision": 0},
+            {"text": "hi", "expected_revision": 0, "expected_page": "tab-a"},
+            {"widget": "text", "expected_revision": 0, "expected_page": "tab-a"},
             {},
         ):
             with self.subTest(params=params):
@@ -110,12 +129,24 @@ class ValidateParamsTests(unittest.TestCase):
         for widget in (3, 3.5, None, True, ["text"], {"n": "x"}):
             with self.subTest(widget=widget):
                 result = COMMANDS.validate_params(
-                    {"widget": widget, "text": "hi", "expected_revision": 0}
+                    {
+                        "widget": widget,
+                        "text": "hi",
+                        "expected_revision": 0,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertEqual(result, {"ok": False, "error": "invalid widget name"})
 
     def test_rejects_empty_widget_name(self):
-        result = COMMANDS.validate_params({"widget": "", "text": "hi", "expected_revision": 0})
+        result = COMMANDS.validate_params(
+            {
+                "widget": "",
+                "text": "hi",
+                "expected_revision": 0,
+                "expected_page": "tab-a",
+            }
+        )
         self.assertEqual(result, {"ok": False, "error": "invalid widget name"})
 
     def test_rejects_oversized_widget_name(self):
@@ -124,6 +155,7 @@ class ValidateParamsTests(unittest.TestCase):
                 "widget": "x" * (COMMANDS.MAX_WIDGET_NAME_LENGTH + 1),
                 "text": "hi",
                 "expected_revision": 0,
+                "expected_page": "tab-a",
             }
         )
         self.assertEqual(result, {"ok": False, "error": "invalid widget name"})
@@ -132,7 +164,12 @@ class ValidateParamsTests(unittest.TestCase):
         for length in (1, COMMANDS.MAX_WIDGET_NAME_LENGTH):
             with self.subTest(length=length):
                 result = COMMANDS.validate_params(
-                    {"widget": "x" * length, "text": "hi", "expected_revision": 0}
+                    {
+                        "widget": "x" * length,
+                        "text": "hi",
+                        "expected_revision": 0,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertIs(result["ok"], True)
 
@@ -140,7 +177,12 @@ class ValidateParamsTests(unittest.TestCase):
         for text in (3, 3.5, None, True, ["hi"], {"n": "x"}):
             with self.subTest(text=text):
                 result = COMMANDS.validate_params(
-                    {"widget": "text", "text": text, "expected_revision": 0}
+                    {
+                        "widget": "text",
+                        "text": text,
+                        "expected_revision": 0,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertEqual(result, {"ok": False, "error": "invalid text"})
 
@@ -150,6 +192,7 @@ class ValidateParamsTests(unittest.TestCase):
                 "widget": "text",
                 "text": "x" * (COMMANDS.MAX_TEXT_LENGTH + 1),
                 "expected_revision": 0,
+                "expected_page": "tab-a",
             }
         )
         self.assertEqual(result, {"ok": False, "error": "invalid text"})
@@ -158,7 +201,12 @@ class ValidateParamsTests(unittest.TestCase):
         for text in ("", "x" * COMMANDS.MAX_TEXT_LENGTH):
             with self.subTest(length=len(text)):
                 result = COMMANDS.validate_params(
-                    {"widget": "text", "text": text, "expected_revision": 0}
+                    {
+                        "widget": "text",
+                        "text": text,
+                        "expected_revision": 0,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertIs(result["ok"], True)
                 self.assertEqual(result["text"], text)
@@ -167,7 +215,12 @@ class ValidateParamsTests(unittest.TestCase):
         for revision in (True, False):
             with self.subTest(revision=revision):
                 result = COMMANDS.validate_params(
-                    {"widget": "text", "text": "hi", "expected_revision": revision}
+                    {
+                        "widget": "text",
+                        "text": "hi",
+                        "expected_revision": revision,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertEqual(result, {"ok": False, "error": "invalid expected revision"})
 
@@ -175,22 +228,88 @@ class ValidateParamsTests(unittest.TestCase):
         for revision in ("3", 3.5, None, [], {"n": 1}):
             with self.subTest(revision=revision):
                 result = COMMANDS.validate_params(
-                    {"widget": "text", "text": "hi", "expected_revision": revision}
+                    {
+                        "widget": "text",
+                        "text": "hi",
+                        "expected_revision": revision,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertEqual(result, {"ok": False, "error": "invalid expected revision"})
 
     def test_rejects_negative_revision(self):
-        result = COMMANDS.validate_params({"widget": "text", "text": "hi", "expected_revision": -1})
+        result = COMMANDS.validate_params(
+            {
+                "widget": "text",
+                "text": "hi",
+                "expected_revision": -1,
+                "expected_page": "tab-a",
+            }
+        )
         self.assertEqual(result, {"ok": False, "error": "invalid expected revision"})
 
     def test_accepts_zero_and_positive_revision(self):
         for revision in (0, 7, 2**63):
             with self.subTest(revision=revision):
                 result = COMMANDS.validate_params(
-                    {"widget": "text", "text": "hi", "expected_revision": revision}
+                    {
+                        "widget": "text",
+                        "text": "hi",
+                        "expected_revision": revision,
+                        "expected_page": "tab-a",
+                    }
                 )
                 self.assertIs(result["ok"], True)
                 self.assertEqual(result["expected_revision"], revision)
+
+    def test_rejects_non_string_page(self):
+        for page in (3, 3.5, None, True, ["tab-a"], {"n": "x"}):
+            with self.subTest(page=page):
+                result = COMMANDS.validate_params(
+                    {
+                        "widget": "text",
+                        "text": "hi",
+                        "expected_revision": 0,
+                        "expected_page": page,
+                    }
+                )
+                self.assertEqual(result, {"ok": False, "error": "invalid expected page"})
+
+    def test_rejects_empty_page(self):
+        result = COMMANDS.validate_params(
+            {
+                "widget": "text",
+                "text": "hi",
+                "expected_revision": 0,
+                "expected_page": "",
+            }
+        )
+        self.assertEqual(result, {"ok": False, "error": "invalid expected page"})
+
+    def test_rejects_oversized_page(self):
+        result = COMMANDS.validate_params(
+            {
+                "widget": "text",
+                "text": "hi",
+                "expected_revision": 0,
+                "expected_page": "x" * (COMMANDS.MAX_WIDGET_NAME_LENGTH + 1),
+            }
+        )
+        self.assertEqual(result, {"ok": False, "error": "invalid expected page"})
+
+    def test_accepts_boundary_page_lengths(self):
+        for length in (1, COMMANDS.MAX_WIDGET_NAME_LENGTH):
+            with self.subTest(length=length):
+                result = COMMANDS.validate_params(
+                    {
+                        "widget": "text",
+                        "text": "hi",
+                        "expected_revision": 0,
+                        "expected_page": "x" * length,
+                    }
+                )
+                self.assertIs(result["ok"], True)
+                self.assertEqual(result["expected_page"], "x" * length)
 
 
 class ResolveSelectionTests(unittest.TestCase):

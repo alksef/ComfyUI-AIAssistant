@@ -156,9 +156,19 @@ class WebSocketSyncTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(body["snapshot"]["revision"], 7)
             self.assertEqual(
                 body["pages"],
-                [{"page_id": "tab-a", "workflow_name": "KSampler", "connected": True}],
+                [
+                    {
+                        "page_id": "tab-a",
+                        "page_label": "AI-TAB-",
+                        "workflow_name": "KSampler",
+                        "connected": True,
+                    }
+                ],
             )
-            self.assertEqual(body["active_page"], {"page_id": "tab-a", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-a", "page_label": "AI-TAB-", "connected": True},
+            )
         finally:
             await ws.close()
 
@@ -170,11 +180,17 @@ class WebSocketSyncTests(unittest.IsolatedAsyncioTestCase):
             await self._send_snapshot(ws1, "tab-a", 7)
             await self._register(ws2, "tab-b")
             body = await self._get_envelope()
-            self.assertEqual(body["active_page"], {"page_id": "tab-b", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-b", "page_label": "AI-TAB-", "connected": True},
+            )
             self.assertEqual(body["snapshot"]["revision"], 7)
             await self._send_snapshot(ws2, "tab-b", 8)
             body = await self._get_envelope()
-            self.assertEqual(body["active_page"], {"page_id": "tab-b", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-b", "page_label": "AI-TAB-", "connected": True},
+            )
             self.assertEqual(body["snapshot"]["revision"], 8)
         finally:
             await ws1.close()
@@ -192,7 +208,10 @@ class WebSocketSyncTests(unittest.IsolatedAsyncioTestCase):
             reply = await ws1.receive_json()
             self.assertEqual(reply, {"type": "activated", "ok": True})
             body = await self._get_envelope()
-            self.assertEqual(body["active_page"], {"page_id": "tab-a", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-a", "page_label": "AI-TAB-", "connected": True},
+            )
             self.assertEqual(body["snapshot"]["revision"], 7)
         finally:
             await ws1.close()
@@ -217,13 +236,26 @@ class WebSocketSyncTests(unittest.IsolatedAsyncioTestCase):
             await ws2.receive_json()
             await ws1.close()
             body = await self._get_envelope()
-            self.assertEqual(body["active_page"], {"page_id": "tab-b", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-b", "page_label": "AI-TAB-", "connected": True},
+            )
             self.assertEqual(body["snapshot"]["revision"], 8)
             self.assertEqual(
                 body["pages"],
                 [
-                    {"page_id": "tab-a", "workflow_name": "KSampler", "connected": False},
-                    {"page_id": "tab-b", "workflow_name": "Flow B", "connected": True},
+                    {
+                        "page_id": "tab-a",
+                        "page_label": "AI-TAB-",
+                        "workflow_name": "KSampler",
+                        "connected": False,
+                    },
+                    {
+                        "page_id": "tab-b",
+                        "page_label": "AI-TAB-",
+                        "workflow_name": "Flow B",
+                        "connected": True,
+                    },
                 ],
             )
             await ws2.close()
@@ -297,7 +329,10 @@ class WebSocketSyncTests(unittest.IsolatedAsyncioTestCase):
             await self._send_snapshot(ws, "tab-a", 6)
             body = await self._get_envelope()
             self.assertEqual(body["snapshot"]["revision"], 6)
-            self.assertEqual(body["active_page"], {"page_id": "tab-a", "connected": True})
+            self.assertEqual(
+                body["active_page"],
+                {"page_id": "tab-a", "page_label": "AI-TAB-", "connected": True},
+            )
         finally:
             await ws.close()
 

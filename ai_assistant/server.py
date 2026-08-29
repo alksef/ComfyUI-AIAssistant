@@ -18,7 +18,7 @@ from server import PromptServer
 
 from . import commands
 from .mcp_protocol import JSONRPC_VERSION, PARSE_ERROR, dispatch
-from .pages import PageRegistry
+from .pages import PageRegistry, page_label
 
 SCHEMA_VERSION = "comfyui.ai-assistant.context/1"
 CONTEXT_PATH = "/ai-assistant/context"
@@ -137,7 +137,11 @@ def _context_envelope() -> dict[str, Any]:
         }
     envelope["pages"] = _registry.summaries()
     active = _registry.active_page_id()
-    envelope["active_page"] = None if active is None else {"page_id": active, "connected": True}
+    envelope["active_page"] = (
+        None
+        if active is None
+        else {"page_id": active, "page_label": page_label(active), "connected": True}
+    )
     return envelope
 
 
@@ -257,6 +261,7 @@ def _handle_set_widget_text(params: dict[str, Any]) -> dict[str, Any]:
     widget = validated["widget"]
     text = validated["text"]
     expected_revision = validated["expected_revision"]
+    expected_page = validated["expected_page"]
 
     envelope = _context_envelope()
     selection = commands.resolve_selection(envelope, widget)
@@ -267,6 +272,11 @@ def _handle_set_widget_text(params: dict[str, Any]) -> dict[str, Any]:
     ws = None if active is None else _page_sockets.get(active)
     if ws is None:
         return commands.failure_result("no active page")
+
+    if expected_page != active:
+        snapshot = envelope.get("snapshot")
+        current_revision = snapshot.get("revision") if isinstance(snapshot, dict) else None
+        return commands.failure_result("active page changed", current_revision)
 
     revision = commands.check_revision(envelope, expected_revision)
     if not revision.get("ok"):

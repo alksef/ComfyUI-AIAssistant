@@ -10,6 +10,7 @@ import {
   singleSelectedNode,
   applyWidgetText,
   isCommandFrame,
+  pageBadgeLabel,
 } from "./sync.js";
 
 const SYNC_PATH = "/ai-assistant/ws";
@@ -19,6 +20,33 @@ app.registerExtension({
   name: "ComfyUI-AIAssistant.ContextSync",
   setup() {
     const pageId = crypto.randomUUID();
+    const badgeLabel = pageBadgeLabel(pageId);
+    if (badgeLabel !== null) {
+      try {
+        const badge = document.createElement("div");
+        badge.id = "ai-assistant-page-badge";
+        badge.textContent = badgeLabel;
+        badge.title = pageId;
+        Object.assign(badge.style, {
+          font: "11px/1.4 ui-monospace, monospace",
+          padding: "2px 8px",
+          borderRadius: "6px",
+          background: "rgba(30,30,30,0.55)",
+          color: "#c8c8c8",
+          pointerEvents: "none",
+          userSelect: "none",
+          whiteSpace: "nowrap",
+          position: "fixed",
+          top: "4px",
+          left: "50%",
+          transform: "translateX(-50%)",
+          zIndex: "9999",
+        });
+        document.body.appendChild(badge);
+      } catch {
+        // a badge failure must never break the extension
+      }
+    }
     let socket = null;
     let attempt = 0;
     let revision = 0;

@@ -22,6 +22,7 @@ _INVALID_PARAMS_KEYS_ERROR = "invalid params keys"
 _INVALID_WIDGET_NAME_ERROR = "invalid widget name"
 _INVALID_TEXT_ERROR = "invalid text"
 _INVALID_REVISION_ERROR = "invalid expected revision"
+_INVALID_PAGE_ERROR = "invalid expected page"
 _NO_SELECTION_ERROR = "no selection available"
 _NO_NODE_SELECTED_ERROR = "no node selected"
 _MULTIPLE_NODES_ERROR = "multiple nodes selected"
@@ -46,7 +47,7 @@ def validate_params(params: Any) -> dict[str, Any]:
     """Validate the ``set_widget_text`` tool arguments."""
     if not isinstance(params, dict):
         return {"ok": False, "error": _INVALID_PARAMS_SHAPE_ERROR}
-    if set(params) != {"widget", "text", "expected_revision"}:
+    if set(params) != {"widget", "text", "expected_revision", "expected_page"}:
         return {"ok": False, "error": _INVALID_PARAMS_KEYS_ERROR}
     widget = params["widget"]
     if not isinstance(widget, str) or not 1 <= len(widget) <= MAX_WIDGET_NAME_LENGTH:
@@ -61,11 +62,15 @@ def validate_params(params: Any) -> dict[str, Any]:
         or expected_revision < 0
     ):
         return {"ok": False, "error": _INVALID_REVISION_ERROR}
+    expected_page = params["expected_page"]
+    if not isinstance(expected_page, str) or not 1 <= len(expected_page) <= MAX_WIDGET_NAME_LENGTH:
+        return {"ok": False, "error": _INVALID_PAGE_ERROR}
     return {
         "ok": True,
         "widget": widget,
         "text": text,
         "expected_revision": expected_revision,
+        "expected_page": expected_page,
     }
 
 

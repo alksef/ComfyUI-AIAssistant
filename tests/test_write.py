@@ -121,9 +121,16 @@ def _set_widget_call_args(arguments: Any, id_value: str = "write-1") -> bytes:
     return json.dumps(message).encode("utf-8")
 
 
-def _set_widget_call(widget: str, text: str, expected_revision: int) -> bytes:
+def _set_widget_call(
+    widget: str, text: str, expected_revision: int, expected_page: str = "tab-a"
+) -> bytes:
     return _set_widget_call_args(
-        {"widget": widget, "text": text, "expected_revision": expected_revision}
+        {
+            "widget": widget,
+            "text": text,
+            "expected_revision": expected_revision,
+            "expected_page": expected_page,
+        }
     )
 
 
@@ -189,10 +196,17 @@ class WritePathTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_params_refused_without_page(self):
         for arguments in (
-            {"widget": "prompt", "text": "new"},
-            {"widget": "prompt", "expected_revision": 7},
-            {"widget": "prompt", "text": "new", "expected_revision": 7, "extra": 1},
-            {"widget": 3, "text": "new", "expected_revision": 7},
+            {"widget": "prompt", "text": "new", "expected_page": "tab-a"},
+            {"widget": "prompt", "expected_revision": 7, "expected_page": "tab-a"},
+            {
+                "widget": "prompt",
+                "text": "new",
+                "expected_revision": 7,
+                "expected_page": "tab-a",
+                "extra": 1,
+            },
+            {"widget": 3, "text": "new", "expected_revision": 7, "expected_page": "tab-a"},
+            {"widget": "prompt", "text": "new", "expected_revision": 7},
             "not-a-dict",
         ):
             with self.subTest(arguments=arguments):
@@ -221,6 +235,22 @@ class WritePathTests(unittest.IsolatedAsyncioTestCase):
             payload = json.loads(result["content"][0]["text"])
             self.assertEqual(payload["error"], "revision mismatch")
             self.assertEqual(payload["current_revision"], 7)
+        finally:
+            await ws.close()
+
+    async def test_wrong_expected_page_refused_no_frame(self):
+        ws = await self._connect_ws()
+        try:
+            await self._register(ws, "tab-a")
+            await self._send_snapshot(ws, "tab-a", _text_snapshot(7))
+            body = await self._post_mcp(_set_widget_call("prompt", "new", 7, expected_page="tab-b"))
+            result = body["result"]
+            self.assertIs(result["isError"], True)
+            payload = json.loads(result["content"][0]["text"])
+            self.assertEqual(payload["error"], "active page changed")
+            self.assertEqual(payload["current_revision"], 7)
+            with self.assertRaises(asyncio.TimeoutError):
+                await ws.receive_json(timeout=0.2)
         finally:
             await ws.close()
 
@@ -339,7 +369,7 @@ class WritePathTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(envelope["snapshot"]["revision"], 7)
             self.assertEqual(
                 envelope["active_page"],
-                {"page_id": "tab-a", "connected": True},
+                {"page_id": "tab-a", "page_label": "AI-TAB-", "connected": True},
             )
         finally:
             await ws.close()

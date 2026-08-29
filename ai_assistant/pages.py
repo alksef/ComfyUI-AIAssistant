@@ -27,7 +27,14 @@ _INVALID_SNAPSHOT_ERROR = "snapshot must be a dict"
 
 Clock = Callable[[], float]
 
-__all__ = ["PageRegistry", "PAGE_CAP"]
+__all__ = ["PageRegistry", "PAGE_CAP", "page_label"]
+
+
+def page_label(page_id: str) -> str:
+    """Human-readable badge label for a page id, ``AI-XXXX`` or the raw id."""
+    if isinstance(page_id, str) and len(page_id) >= 4:
+        return "AI-" + page_id[:4].upper()
+    return page_id
 
 
 def _is_valid_page_id(page_id: Any) -> bool:
@@ -164,6 +171,7 @@ class PageRegistry:
         return [
             {
                 "page_id": page_id,
+                "page_label": page_label(page_id),
                 "workflow_name": page.workflow_name,
                 "connected": page.connected,
             }

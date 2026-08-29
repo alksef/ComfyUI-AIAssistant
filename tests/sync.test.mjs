@@ -11,6 +11,7 @@ import {
   singleSelectedNode,
   applyWidgetText,
   isCommandFrame,
+  pageBadgeLabel,
 } from "../web/sync.js";
 
 test("SCHEMA_VERSION is the bounded context contract version", () => {
@@ -192,6 +193,17 @@ test("applyWidgetText swallows throwing callbacks and still reports applied", ()
   });
   assert.deepEqual(result, { applied: true });
   assert.equal(node.widgets[0].value, "new");
+});
+
+test("pageBadgeLabel is the deterministic uppercase 4-char prefix", () => {
+  assert.equal(pageBadgeLabel("e48e94c1-3115-4d0f-9a2b-1234567890ab"), "AI-E48E");
+});
+
+test("pageBadgeLabel returns null for short, non-string and empty input", () => {
+  assert.equal(pageBadgeLabel("abc"), null);
+  assert.equal(pageBadgeLabel(null), null);
+  assert.equal(pageBadgeLabel(42), null);
+  assert.equal(pageBadgeLabel(""), null);
 });
 
 test("isCommandFrame matches only the exact set_widget_text command frame", () => {
