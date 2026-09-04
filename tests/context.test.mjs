@@ -334,11 +334,11 @@ test("long strings, arrays, objects, deep nesting and widget count bounds", () =
 
   const ctx = buildContext(canvas);
   const json = JSON.stringify(ctx);
-  assert.ok(json.length < 5000, `output not bounded: ${json.length} bytes`);
+  assert.ok(json.length < 8000, `output not bounded: ${json.length} bytes`);
   const byName = Object.fromEntries(ctx.selection[0].widgets.map((w) => [w.name, w]));
 
-  assert.equal(byName.long_string.value, "<truncated>");
-  assert.equal(byName.long_string.truncated, true);
+  assert.equal(byName.long_string.value, "x".repeat(5000));
+  assert.equal(byName.long_string.truncated, false);
 
   assert.equal(byName.long_array.value.length, 4);
   assert.deepEqual(byName.long_array.value, Array.from({ length: 4 }, (_, i) => i));
@@ -367,6 +367,52 @@ test("long strings, arrays, objects, deep nesting and widget count bounds", () =
     selected_nodes: { 1: { id: 1, type: "T", widgets: manyWidgets, inputs: [], outputs: [] } },
   });
   assert.equal(many.selection[0].widgets.length, 24);
+});
+
+test("top-level strings beyond the transport clip keep a prefix, tail and length", () => {
+  const full = "п".repeat(40000);
+  const canvas = {
+    graph: {},
+    selected_nodes: {
+      1: {
+        id: 1,
+        type: "T",
+        widgets: [
+          { name: "prompt", type: "STRING", value: full },
+          { name: "nested", type: "OBJ", value: { s: "y".repeat(600) } },
+        ],
+        inputs: [],
+        outputs: [],
+      },
+    },
+  };
+  const ctx = buildContext(canvas);
+  const byName = Object.fromEntries(ctx.selection[0].widgets.map((w) => [w.name, w]));
+
+  const prompt = byName.prompt;
+  assert.equal(prompt.truncated, true);
+  assert.equal(prompt.value.length, 32768 + 1);
+  assert.ok(prompt.value.startsWith(full.slice(0, 100)));
+  assert.ok(prompt.value.endsWith("…"));
+  assert.equal(prompt.length, 40000);
+
+  assert.equal(byName.nested.value.s, "<truncated>");
+  assert.equal(byName.nested.length, undefined);
+});
+
+test("a maximal snapshot stays under the WS frame budget", () => {
+  const widgets = Array.from({ length: 24 }, (_, i) => ({
+    name: "w" + String(i).padStart(2, "0"),
+    type: "STRING",
+    value: "д".repeat(40000),
+  }));
+  const canvas = {
+    graph: {},
+    selected_nodes: { 1: { id: 1, type: "T", widgets, inputs: [], outputs: [] } },
+  };
+  const ctx = buildContext(canvas);
+  const bytes = new TextEncoder().encode(JSON.stringify(ctx)).length;
+  assert.ok(bytes <= 4 * 1024 * 1024, `maximal snapshot is too large: ${bytes} bytes`);
 });
 
 test("cyclic, custom-class, function and binary-like values degrade without throwing", () => {

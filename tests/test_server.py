@@ -36,11 +36,13 @@ class FakeRequest:
         declared_length: int | None = None,
         method: str = "POST",
         headers: dict[str, str] | None = None,
+        query: dict[str, str] | None = None,
     ) -> None:
         self.content = FakeContent(body, declared_length)
         self.content_length = declared_length
         self.method = method
         self.headers = headers if headers is not None else {"Content-Type": "application/json"}
+        self.query = query if query is not None else {}
 
 
 class FakeRouteTable:
@@ -147,10 +149,12 @@ class RootEntrypointTests(unittest.TestCase):
     def test_registers_context_mcp_and_ws_routes(self):
         registered = FakePromptServer.instance.routes.routes
         context_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.CONTEXT_PATH]
+        widget_text_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.WIDGET_TEXT_PATH]
         mcp_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.MCP_PATH]
         ws_routes = [(m, p) for m, p, _h in registered if p == SERVER_MOD.WS_PATH]
-        self.assertEqual(len(registered), 4)
+        self.assertEqual(len(registered), 5)
         self.assertEqual(sorted(m for m, _p in context_routes), ["GET", "POST"])
+        self.assertEqual(widget_text_routes, [("GET", SERVER_MOD.WIDGET_TEXT_PATH)])
         self.assertEqual(mcp_routes, [("*", SERVER_MOD.MCP_PATH)])
         self.assertEqual(ws_routes, [("GET", SERVER_MOD.WS_PATH)])
 
@@ -158,6 +162,7 @@ class RootEntrypointTests(unittest.TestCase):
         handlers = {(m, p): h for m, p, h in FakePromptServer.instance.routes.routes}
         self.assertIs(handlers[("GET", SERVER_MOD.CONTEXT_PATH)], SERVER_MOD.handle_get)
         self.assertIs(handlers[("POST", SERVER_MOD.CONTEXT_PATH)], SERVER_MOD.handle_post)
+        self.assertIs(handlers[("GET", SERVER_MOD.WIDGET_TEXT_PATH)], SERVER_MOD.handle_widget_text)
         self.assertIs(handlers[("*", SERVER_MOD.MCP_PATH)], SERVER_MOD.handle_mcp)
         self.assertIs(handlers[("GET", SERVER_MOD.WS_PATH)], SERVER_MOD.handle_ws)
 
@@ -379,9 +384,10 @@ class McpRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status, 200)
         self._assert_no_store(response)
         tools = self._json(response)["result"]["tools"]
-        self.assertEqual(len(tools), 2)
+        self.assertEqual(len(tools), 3)
         self.assertEqual(tools[0]["name"], MCP_MOD.TOOL_NAME)
         self.assertEqual(tools[1]["name"], MCP_MOD.SET_WIDGET_TOOL_NAME)
+        self.assertEqual(tools[2]["name"], MCP_MOD.GET_WIDGET_TOOL_NAME)
 
     async def test_tools_call_unavailable_envelope_when_mailbox_empty(self):
         response = await _mcp(self._message("tools/call", params={"name": MCP_MOD.TOOL_NAME}))
@@ -491,6 +497,174 @@ class McpRouteTests(unittest.IsolatedAsyncioTestCase):
         ]
         for response in responses:
             self._assert_no_store(response)
+
+
+class WidgetTextRouteTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        SERVER_MOD._mailbox = SERVER_MOD.ContextMailbox()
+
+    @staticmethod
+    def _json(response) -> dict[str, object]:
+        return json.loads(response.body)
+
+    def _assert_no_store(self, response) -> None:
+        self.assertEqual(response.headers.get("Cache-Control"), "no-store")
+
+    @staticmethod
+    def _seed_body(value: str, *, widget_type: str = "text") -> bytes:
+        payload = _valid_payload(
+            workflow={"selection_detail": "full", "selected_count": 1, "title": "workflow"},
+            selection=[
+                {
+                    "id": 3,
+                    "type": "CLIPTextEncode",
+                    "title": "Positive",
+                    "widgets": [
+                        {"name": "seed", "type": "INT", "value": 42},
+                        {"name": "text", "type": widget_type, "value": value},
+                    ],
+                }
+            ],
+        )
+        return json.dumps(payload).encode("utf-8")
+
+    async def _seed(self, value: str, *, widget_type: str = "text") -> None:
+        response = await _post(self._seed_body(value, widget_type=widget_type))
+        self.assertEqual(response.status, 200)
+
+    @staticmethod
+    async def _widget_text(query: dict[str, str]):
+        return await SERVER_MOD.handle_widget_text(FakeRequest(query=query, method="GET"))
+
+    async def test_returns_full_text_while_envelope_shows_preview(self):
+        long_value = "п" * 2000
+        await self._seed(long_value)
+        context = self._json(await _get())
+        row = context["snapshot"]["selection"][0]["widgets"][1]
+        self.assertEqual(len(row["value"]), SERVER_MOD.widget_text.PREVIEW_CHARS)
+        self.assertTrue(row["value"].endswith("…"))
+        self.assertEqual(row["length"], 2000)
+        response = await self._widget_text({"widget": "text"})
+        self.assertEqual(response.status, 200)
+        self._assert_no_store(response)
+        self.assertEqual(
+            self._json(response),
+            {
+                "revision": 7,
+                "widget": "text",
+                "offset": 0,
+                "limit": SERVER_MOD.widget_text.DEFAULT_LIMIT,
+                "length": 2000,
+                "text": long_value,
+                "truncated": False,
+            },
+        )
+
+    async def test_short_values_travel_whole_in_envelope(self):
+        await self._seed("y" * 512)
+        context = self._json(await _get())
+        row = context["snapshot"]["selection"][0]["widgets"][1]
+        self.assertEqual(row["value"], "y" * 512)
+        self.assertNotIn("length", row)
+
+    async def test_paging_slices_and_flags_the_tail(self):
+        await self._seed("x" * 100)
+        first = self._json(
+            await self._widget_text({"widget": "text", "offset": "10", "limit": "40"})
+        )
+        self.assertEqual(first["text"], "x" * 40)
+        self.assertIs(first["truncated"], True)
+        self.assertEqual(first["offset"], 10)
+        self.assertEqual(first["limit"], 40)
+        second = self._json(
+            await self._widget_text({"widget": "text", "offset": "60", "limit": "40"})
+        )
+        self.assertEqual(second["text"], "x" * 40)
+        self.assertIs(second["truncated"], False)
+        beyond = self._json(
+            await self._widget_text({"widget": "text", "offset": "150", "limit": "40"})
+        )
+        self.assertEqual(beyond["text"], "")
+        self.assertIs(beyond["truncated"], False)
+
+    async def test_bad_params_are_rejected_with_400(self):
+        await self._seed("hello")
+        over_limit = str(SERVER_MOD.widget_text.MAX_LIMIT + 1)
+        for query, error in (
+            ({}, "invalid widget name"),
+            ({"widget": ""}, "invalid widget name"),
+            ({"widget": "text", "offset": "abc"}, "invalid offset"),
+            ({"widget": "text", "offset": "-1"}, "invalid offset"),
+            ({"widget": "text", "limit": "0"}, "invalid limit"),
+            ({"widget": "text", "limit": over_limit}, "invalid limit"),
+        ):
+            with self.subTest(query=query):
+                response = await self._widget_text(query)
+                self.assertEqual(response.status, 400)
+                self._assert_no_store(response)
+                self.assertEqual(self._json(response), {"error": error})
+
+    async def test_selection_and_widget_problems_are_404(self):
+        response = await self._widget_text({"widget": "text"})
+        self.assertEqual(response.status, 404)
+        self.assertEqual(self._json(response), {"error": "no selection available"})
+
+        await _post(
+            _valid_body(
+                workflow={"selection_detail": "multiple", "selected_count": 2},
+                selection=["KSampler", "CLIPTextEncode"],
+            )
+        )
+        response = await self._widget_text({"widget": "text"})
+        self.assertEqual(response.status, 404)
+        self.assertEqual(self._json(response), {"error": "multiple nodes selected"})
+
+        await self._seed("hello")
+        for widget, error in (
+            ("nope", "unknown widget"),
+            ("seed", "widget is not text-like"),
+        ):
+            with self.subTest(widget=widget):
+                response = await self._widget_text({"widget": widget})
+                self.assertEqual(response.status, 404)
+                self.assertEqual(self._json(response), {"error": error})
+
+    async def test_mcp_get_widget_text_call_returns_full_text(self):
+        long_value = "п" * 700
+        await self._seed(long_value)
+        message = {
+            "jsonrpc": "2.0",
+            "id": "wt-1",
+            "method": "tools/call",
+            "params": {
+                "name": "get_widget_text",
+                "arguments": {"widget": "text", "offset": 0, "limit": 100},
+            },
+        }
+        response = await _mcp(json.dumps(message).encode("utf-8"))
+        self.assertEqual(response.status, 200)
+        self._assert_no_store(response)
+        result = self._json(response)["result"]
+        self.assertIs(result["isError"], False)
+        payload = json.loads(result["content"][0]["text"])
+        self.assertEqual(payload["widget"], "text")
+        self.assertEqual(payload["length"], 700)
+        self.assertEqual(payload["text"], long_value[:100])
+        self.assertIs(payload["truncated"], True)
+
+    async def test_mcp_get_widget_text_call_refusals_are_tool_errors(self):
+        message = {
+            "jsonrpc": "2.0",
+            "id": "wt-2",
+            "method": "tools/call",
+            "params": {"name": "get_widget_text", "arguments": None},
+        }
+        response = await _mcp(json.dumps(message).encode("utf-8"))
+        result = self._json(response)["result"]
+        self.assertIs(result["isError"], True)
+        self.assertEqual(
+            json.loads(result["content"][0]["text"]), {"error": "invalid params shape"}
+        )
 
 
 if __name__ == "__main__":

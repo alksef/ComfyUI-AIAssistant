@@ -16,16 +16,18 @@ from typing import Any
 from aiohttp import WSMsgType, web
 from server import PromptServer
 
-from . import commands
+from . import commands, widget_text
 from .mcp_protocol import JSONRPC_VERSION, PARSE_ERROR, dispatch
 from .pages import PageRegistry, page_label
 
 SCHEMA_VERSION = "comfyui.ai-assistant.context/1"
 CONTEXT_PATH = "/ai-assistant/context"
+WIDGET_TEXT_PATH = "/ai-assistant/widget-text"
 MCP_PATH = "/mcp"
 WS_PATH = "/ai-assistant/ws"
 MAX_BODY_BYTES = 128 * 1024
 MAX_MCP_BODY_BYTES = 64 * 1024
+MAX_WS_MSG_BYTES = 4 * 1024 * 1024
 _CHUNK_SIZE = 8192
 
 WRITE_CONFIRM_TIMEOUT = 3.0
@@ -129,11 +131,13 @@ def _context_envelope() -> dict[str, Any]:
     if not _mailbox.available:
         envelope = _unavailable_envelope()
     else:
+        snapshot = _mailbox.snapshot_copy()
+        widget_text.preview_snapshot(snapshot)
         envelope = {
             "schema_version": SCHEMA_VERSION,
             "available": True,
             "received_at": _mailbox.received_at,
-            "snapshot": _mailbox.snapshot_copy(),
+            "snapshot": snapshot,
         }
     envelope["pages"] = _registry.summaries()
     active = _registry.active_page_id()
@@ -160,6 +164,42 @@ def _mirror_mailbox() -> None:
 
 async def handle_get(request: web.Request) -> web.Response:
     return _json(_context_envelope())
+
+
+def _query_int(request: web.Request, name: str) -> int | str | None:
+    """Parse a query argument that may be absent; unparsable stays a string."""
+    raw = request.query.get(name)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return raw
+
+
+async def handle_widget_text(request: web.Request) -> web.Response:
+    params: dict[str, Any] = {"widget": request.query.get("widget")}
+    offset = _query_int(request, "offset")
+    limit = _query_int(request, "limit")
+    if offset is not None:
+        params["offset"] = offset
+    if limit is not None:
+        params["limit"] = limit
+    validated = widget_text.validate_params(params)
+    if not validated.get("ok"):
+        return _json({"error": validated["error"]}, status=400)
+    read = widget_text.read_text(_mailbox.snapshot_copy(), validated["widget"])
+    if not read.get("ok"):
+        return _json({"error": read["error"]}, status=404)
+    return _json(
+        widget_text.page(
+            read["revision"],
+            validated["widget"],
+            validated["offset"],
+            validated["limit"],
+            read["value"],
+        )
+    )
 
 
 async def _read_bounded_body(request: web.Request, limit: int = MAX_BODY_BYTES) -> bytes:
@@ -319,6 +359,23 @@ async def _confirm_write(response: dict[str, Any]) -> dict[str, Any]:
     return response
 
 
+def _handle_get_widget_text(params: dict[str, Any]) -> dict[str, Any]:
+    arguments = params.get("arguments") if isinstance(params, dict) else None
+    validated = widget_text.validate_params(arguments)
+    if not validated.get("ok"):
+        return widget_text.failure_result(validated["error"])
+    read = widget_text.read_text(_mailbox.snapshot_copy(), validated["widget"])
+    if not read.get("ok"):
+        return widget_text.failure_result(read["error"])
+    return widget_text.success_result(
+        read["revision"],
+        validated["widget"],
+        validated["offset"],
+        validated["limit"],
+        read["value"],
+    )
+
+
 async def handle_mcp(request: web.Request) -> web.Response:
     if request.method != "POST":
         return _mcp_method_not_allowed()
@@ -338,7 +395,12 @@ async def handle_mcp(request: web.Request) -> web.Response:
         return _mcp_parse_error()
 
     pending_before = _pending_write is not None
-    response = dispatch(message, _context_envelope, command_handler=_handle_set_widget_text)
+    response = dispatch(
+        message,
+        _context_envelope,
+        command_handler=_handle_set_widget_text,
+        widget_text_handler=_handle_get_widget_text,
+    )
     if response is None:
         return _mcp_no_content()
     if _pending_write is not None and not pending_before:
@@ -428,7 +490,7 @@ async def _ws_handle_message(
 
 
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
-    ws = web.WebSocketResponse(heartbeat=_WS_HEARTBEAT, max_msg_size=MAX_BODY_BYTES)
+    ws = web.WebSocketResponse(heartbeat=_WS_HEARTBEAT, max_msg_size=MAX_WS_MSG_BYTES)
     await ws.prepare(request)
     page_id: str | None = None
     try:
@@ -451,5 +513,6 @@ def register_routes() -> None:
     routes = PromptServer.instance.routes
     routes.get(CONTEXT_PATH)(handle_get)
     routes.post(CONTEXT_PATH)(handle_post)
+    routes.get(WIDGET_TEXT_PATH)(handle_widget_text)
     routes.route("*", MCP_PATH)(handle_mcp)
     routes.get(WS_PATH)(handle_ws)

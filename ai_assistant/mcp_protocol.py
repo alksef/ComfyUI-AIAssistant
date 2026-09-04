@@ -17,7 +17,7 @@ JSONRPC_VERSION = "2.0"
 DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
 SERVER_NAME = "comfyui-ai-assistant"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.2.0"
 
 TOOL_NAME = "get_selection"
 TOOL_DESCRIPTION = "Read-only access to the current ComfyUI canvas selection."
@@ -25,6 +25,12 @@ TOOL_DESCRIPTION = "Read-only access to the current ComfyUI canvas selection."
 SET_WIDGET_TOOL_NAME = "set_widget_text"
 SET_WIDGET_TOOL_DESCRIPTION = (
     "Write text into a text-like widget of the currently selected ComfyUI node."
+)
+
+GET_WIDGET_TOOL_NAME = "get_widget_text"
+GET_WIDGET_TOOL_DESCRIPTION = (
+    "Read the full text of a text-like widget of the currently selected "
+    "ComfyUI node, paged by offset and limit."
 )
 
 PARSE_ERROR = -32700
@@ -110,6 +116,20 @@ def _handle_tools_list(id_value: Any, params: Any, has_params: bool) -> dict[str
                         "additionalProperties": False,
                     },
                 },
+                {
+                    "name": GET_WIDGET_TOOL_NAME,
+                    "description": GET_WIDGET_TOOL_DESCRIPTION,
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "widget": {"type": "string"},
+                            "offset": {"type": "integer", "minimum": 0},
+                            "limit": {"type": "integer", "minimum": 1, "maximum": 32768},
+                        },
+                        "required": ["widget"],
+                        "additionalProperties": False,
+                    },
+                },
             ]
         },
     )
@@ -149,12 +169,27 @@ def _handle_set_widget_text_call(
     return _result_response(id_value, command_handler(params))
 
 
+def _handle_get_widget_text_call(
+    id_value: Any,
+    params: dict[str, Any],
+    widget_text_handler: CommandHandler | None,
+) -> dict[str, Any]:
+    if widget_text_handler is None:
+        text = json.dumps({"error": "widget text handler unavailable"}, separators=(",", ":"))
+        return _result_response(
+            id_value,
+            {"content": [{"type": "text", "text": text}], "isError": True},
+        )
+    return _result_response(id_value, widget_text_handler(params))
+
+
 def _handle_tools_call(
     id_value: Any,
     params: Any,
     has_params: bool,
     context_provider: ContextProvider,
     command_handler: CommandHandler | None,
+    widget_text_handler: CommandHandler | None,
 ) -> dict[str, Any]:
     if not has_params or not isinstance(params, dict):
         return _error_response(id_value, INVALID_PARAMS)
@@ -163,6 +198,8 @@ def _handle_tools_call(
         return _handle_get_selection_call(id_value, params, context_provider)
     if name == SET_WIDGET_TOOL_NAME:
         return _handle_set_widget_text_call(id_value, params, command_handler)
+    if name == GET_WIDGET_TOOL_NAME:
+        return _handle_get_widget_text_call(id_value, params, widget_text_handler)
     return _error_response(id_value, INVALID_PARAMS)
 
 
@@ -176,6 +213,7 @@ def dispatch(
     message: Any,
     context_provider: ContextProvider,
     command_handler: CommandHandler | None = None,
+    widget_text_handler: CommandHandler | None = None,
 ) -> dict[str, Any] | None:
     """Dispatch one decoded JSON-RPC message to a response dict or ``None``.
 
@@ -186,6 +224,7 @@ def dispatch(
     full ``tools/call`` params dict for ``set_widget_text`` and returning its
     MCP result dict, which is placed in the response verbatim; when omitted the
     dispatcher replies with a "command handler unavailable" tool error.
+    ``widget_text_handler`` plays the same role for ``get_widget_text``.
     Notifications always yield ``None``.
     """
     if not isinstance(message, dict):
@@ -205,7 +244,9 @@ def dispatch(
     if method == "tools/list":
         return _handle_tools_list(id_value, params, has_params)
     if method == "tools/call":
-        return _handle_tools_call(id_value, params, has_params, context_provider, command_handler)
+        return _handle_tools_call(
+            id_value, params, has_params, context_provider, command_handler, widget_text_handler
+        )
     if method == "ping":
         return _handle_ping(id_value, params, has_params)
     return _error_response(id_value, METHOD_NOT_FOUND)

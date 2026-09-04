@@ -3,7 +3,8 @@ const MAX_WIDGETS = 24;
 const MAX_DEPTH = 1;
 const MAX_ARRAY_LENGTH = 4;
 const MAX_OBJECT_KEYS = 4;
-const MAX_STRING_LENGTH = 512;
+const MAX_STRING_LENGTH = 32768;
+const MAX_NESTED_STRING_LENGTH = 512;
 const MAX_FIELD_LENGTH = 128;
 const MAX_SLOTS = 24;
 const MAX_LINKS = 8;
@@ -179,8 +180,9 @@ function buildWidgetRow(widget) {
       unsupported: false,
     };
   }
-  const normalized = normalizeValue(safeRead(widget, "value"), 0);
-  return {
+  const raw = safeRead(widget, "value");
+  const normalized = normalizeValue(raw, 0);
+  const row = {
     name,
     type,
     value: normalized.value,
@@ -188,6 +190,11 @@ function buildWidgetRow(widget) {
     redacted: false,
     unsupported: normalized.unsupported,
   };
+  // Tell readers how much text was left beyond the clip.
+  if (normalized.truncated && typeof raw === "string") {
+    row.length = raw.length;
+  }
+  return row;
 }
 
 function buildInputRow(slot, graphLinks) {
@@ -292,7 +299,17 @@ function normalizeValue(value, depth) {
   const t = typeof value;
   if (value === null) return { value: null, truncated: false, unsupported: false };
   if (t === "string") {
-    if (value.length > MAX_STRING_LENGTH) {
+    if (depth === 0) {
+      // Widget-level strings (prompts) stay readable: keep a full prefix
+      // with an explicit tail instead of dropping the text.
+      if (value.length > MAX_STRING_LENGTH) {
+        return {
+          value: value.slice(0, MAX_STRING_LENGTH) + "…",
+          truncated: true,
+          unsupported: false,
+        };
+      }
+    } else if (value.length > MAX_NESTED_STRING_LENGTH) {
       return { value: TRUNCATED, truncated: true, unsupported: false };
     }
     return { value, truncated: false, unsupported: false };

@@ -146,13 +146,13 @@ class NotificationTests(unittest.TestCase):
 
 
 class ToolsListTests(unittest.TestCase):
-    def test_returns_exactly_two_tools_with_exact_shapes(self):
+    def test_returns_exactly_three_tools_with_exact_shapes(self):
         response = MCP.dispatch(_message("tools/list", id_value="list-1"), _provider({}))
         self.assertEqual(response["id"], "list-1")
         self.assertNotIn("error", response)
         tools = response["result"]["tools"]
-        self.assertEqual(len(tools), 2)
-        get_selection, set_widget_text = tools
+        self.assertEqual(len(tools), 3)
+        get_selection, set_widget_text, get_widget_text = tools
         self.assertEqual(get_selection["name"], MCP.TOOL_NAME)
         self.assertEqual(get_selection["description"], MCP.TOOL_DESCRIPTION)
         self.assertEqual(
@@ -164,6 +164,25 @@ class ToolsListTests(unittest.TestCase):
         self.assertEqual(
             set_widget_text["description"],
             "Write text into a text-like widget of the currently selected ComfyUI node.",
+        )
+        self.assertEqual(get_widget_text["name"], MCP.GET_WIDGET_TOOL_NAME)
+        self.assertEqual(
+            get_widget_text["description"],
+            MCP.GET_WIDGET_TOOL_DESCRIPTION,
+        )
+        self.assertNotIn("\n", get_widget_text["description"])
+        self.assertEqual(
+            get_widget_text["inputSchema"],
+            {
+                "type": "object",
+                "properties": {
+                    "widget": {"type": "string"},
+                    "offset": {"type": "integer", "minimum": 0},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 32768},
+                },
+                "required": ["widget"],
+                "additionalProperties": False,
+            },
         )
         self.assertEqual(
             set_widget_text["inputSchema"],
