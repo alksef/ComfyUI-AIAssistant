@@ -1,6 +1,6 @@
 ---
 id: ROADMAP-004
-status: in-progress
+status: completed
 created: 2026-09-04
 updated: 2026-09-04
 ---
